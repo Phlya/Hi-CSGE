@@ -24,8 +24,8 @@ mapped_reads = h5dict.h5dict(reads_file)
 genome_db    = genome.Genome('../genomes/mm9/fasta', readChrms=['#','X'])
 def func():
     mapping.parse_sam(
-        sam_basename1='/exports/eddie/scratch/s1529682/bams/'+basename+'_1.fq.gz'+chunk,
-        sam_basename2='/exports/eddie/scratch/s1529682/bams/'+basename+'_2.fq.gz'+chunk,
+        sam_basename1='/exports/eddie/scratch/s1529682/bams/'+basename+'_fixed_1.fq.gz'+chunk,
+        sam_basename2='/exports/eddie/scratch/s1529682/bams/'+basename+'_fixed_2.fq.gz'+chunk,
         out_dict=mapped_reads,
         genome_db=genome_db, 
         enzyme_name='DpnII')
@@ -44,4 +44,4 @@ try:
     func()
 except ImportError:
     sys.stderr.write('Broken, restarting\n')
-    call('ssh headnode1.ecdf.ed.ac.uk "cd /exports/igmm/datastore/wendy-lab/ilia/scripts; qsub 02_2_launch_parsing.sh ' + args.basename + '"', shell=True)
+    call('ssh headnode1.ecdf.ed.ac.uk "cd /exports/igmm/datastore/wendy-lab/ilia/scripts; qsub 02_2_launch_parsing.sh %s"' % args.basename, shell=True)

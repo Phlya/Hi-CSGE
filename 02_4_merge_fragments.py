@@ -3,13 +3,6 @@ from hiclib import fragmentHiC
 from glob import glob
 import argparse
 import numpy as np
-import os
-import cooler
-import h5py
-import pandas as pd
-from itertools import repeat
-from multiprocessing import Pool
-import sys
 
 parser = argparse.ArgumentParser()
 parser.add_argument("sample")

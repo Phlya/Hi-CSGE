@@ -5,7 +5,8 @@ import sys
 import logging
 import argparse
 from os import path
-    
+import tempfile
+
 parser = argparse.ArgumentParser()
 parser.add_argument("file", help="fastq file to map")
 args = parser.parse_args()
@@ -30,7 +31,7 @@ def func():
         len_step=5,
         nthreads=4,
         #max_reads_per_chunk = 10000000,  #optional, on low-memory machines
-        temp_dir='/exports/eddie/scratch/s1529682/tmp/',  # optional, keep temporary files here
+        temp_dir=tempfile.gettempdir(),  # optional, keep temporary files here
         bowtie_flags='--very-sensitive')
 
 try:

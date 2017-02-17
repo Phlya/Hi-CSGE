@@ -14,4 +14,4 @@ source activate Hi-C
 SF=$(pwd)
 ssh headnode1.ecdf.ed.ac.uk '
 cd '$SF'
-python 02_0_parse_merge_all.py'
+python 02_0_parse_merge_all.py' 

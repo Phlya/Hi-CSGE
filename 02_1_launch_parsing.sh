@@ -4,6 +4,10 @@
 #$ -l h_rt=3:00:00
 #$ -l h_vmem=4G
 #$ -pe sharedmem 2
+
+ sleep $[ ( $RANDOM % 60 )  + 1 ]s
+
+
 . /etc/profile.d/modules.sh
 
 module load anaconda/2.3.0
