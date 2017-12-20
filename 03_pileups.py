@@ -1,160 +1,113 @@
 # -*- coding: utf-8 -*-
-"""
-Spyder Editor
-
-This is a temporary script file.
-"""
 import numpy as np
 import cooler
-#from mirnylib.genome import Genome
-#from hiclib import hicShared
 import pandas as pd
-from mirnylib.numutils import coarsegrain
 import itertools
-from joblib import Parallel, delayed
+#from joblib import Parallel, delayed
+from multiprocessing import Pool
 from functools import partial
-#mm9 = Genome('~/Documents/PhD/Hi-C/genomes/mm9/fasta/', readChrms=["#", "X"])
+from scipy.misc import comb
+import os
+
 
 def get_mids(intervals):
     intervals = intervals.sort_values(['Chromosome', 'Start'])
     intervals = intervals[intervals['Chromosome'].isin(['chr'+ str(i) for i in list(range(1, 20))+['X']])].reset_index(drop=True)
     mids = np.round((intervals['End']+intervals['Start'])/2).astype(int)
-    mids = pd.DataFrame({'Chromosome':intervals['Chromosome'], 'Mids':mids})
+    mids = pd.DataFrame({'Chromosome':intervals['Chromosome'], 'Mids':mids}).drop_duplicates()
     return mids
 
-def get_combinations(mids):
-    combs = []
-    for chrom in set(mids['Chromosome']):
-        current = np.array(list(itertools.combinations(mids[mids['Chromosome']==chrom]['Mids'], 2)))
-        combs.append(pd.DataFrame({'Chromosome':chrom, 'Start':current[:,0], 'End':current[:,1]}))
-    return pd.concat(combs).sort_values(['Chromosome', 'Start', 'End'])
+def get_combinations(mids, res, local=False):
+    m = (mids['Mids']//res).astype(int).values
+    if local:
+        for i in m:
+            yield i, i
+    else:
+        for i in itertools.combinations(m, 2):
+#            if abs(i[1]-i[0])<10**6/res:#############################################
+                yield i
 
-def controlLoops(df):
-    """
-    Creates "control" positions for loops
+def controlLoops(midcombs, res, minshift=10**5, maxshift=10**6, nshifts=1):
+    minbin = minshift//res
+    maxbin = maxshift//res
+    for start, end in midcombs:
+        for i in range(nshifts):
+            shift = np.random.randint(minbin, maxbin)*np.sign(np.random.random()-0.5).astype(int)
+            yield start+shift, end+shift
 
-    :param df: loop (or domain) dataframe
-    :return: ten copies of loop dataframe shifted randomly by 100kb to 1100kb
-    """
-    dfs = []
-    for i in range(10):
-        df = df.copy()
-        ran = (np.random.random(len(df)) + 0.1) * 1000000
-        if i % 2 == 1:
-            ran = -ran
-        df["Start"] = df["Start"] + ran
-        df["End"] = df["End"] + ran
-        dfs.append(df)
-    df = pd.concat(dfs)
-    return df
-
-def averageLoops(loopPositions, filename, pad = 8):
-    c = cooler.Cooler(filename)
-#    mygen = mm9
-    resolution = c.info['bin-size']
-
-    mymaps = []
-
-    for mychr in c.chromnames[:-1]:
-        mymap = np.zeros((2 * pad, 2 * pad), np.float64)
-        print(mychr)
-
-        #data = myd.get_dataset("{0} {0}".format(mychr))
-        data = c.matrix(sparse=True, balance=True).fetch(mychr).tocsr()
-        # plt.imshow(data[:2000, :2000])
-        # plt.show()
-        current = loopPositions[loopPositions["Chromosome"] == mychr]
-        if not len(current) > 0:
+def averageLoops(chrom, mids, c, pad = 7, ctrl=False, local=False):
+    mymap = np.zeros((2*pad + 1, 2*pad + 1), np.float64)
+    data = c.matrix(sparse=True, balance=True).fetch(chrom).tocsr()
+    
+    current = mids[mids["Chromosome"] == chrom]
+    if not len(current) > 1:
+        mymap.fill(np.nan)
+        return mymap
+    if ctrl:
+        current = controlLoops(get_combinations(current, c.binsize, local), c.binsize)
+    else:
+        current = get_combinations(current, c.binsize, local)
+    n = 0
+    for stBin, endBin in current:
+        if not local and abs(endBin - stBin) < pad*2:
             continue
-        current = np.floor(current[['Start', 'End']]/resolution).astype(int)
+        try:
+            mymap += np.nan_to_num(data[stBin - pad:stBin + pad+1, endBin - pad:endBin + pad+1].toarray())
+            n += 1
+        except (IndexError, ValueError) as e:
+            continue
+    return mymap/n
 
-        for stBin, endBin in zip(current["Start"].values, current["End"].values):
-            if abs(stBin - endBin) < pad + 2:
-                continue
-            # print (stBin, endBin)
-            if stBin - pad < 0:
-                continue
-            if endBin + pad > data.shape[0]:
-                continue
-            # plt.imshow(data[stBin - pad:stBin + pad, endBin - pad:endBin + pad])
-            # plt.show()
-            mymap = mymap + np.nan_to_num(data[stBin - pad:stBin + pad, endBin - pad:endBin + pad].toarray())
-        mymaps.append(mymap)
-    for i in mymaps:
-        assert i.shape == (2 * pad, 2*pad)
-    return mymaps
-
-def get_submap(start, end, data, pad):
-    return np.nan_to_num(data[start - pad:start + pad, end - pad:end + pad].toarray())
-
-def averageLoopsParallel(loopPositions, filename, pad = 8):
+def averageLoopsWithControl(mids, filename, pad, nproc, chroms, local):
+    p = Pool(nproc)
     c = cooler.Cooler(filename)
-#    mygen = mm9
-    resolution = c.info['bin-size']
-
-    mymaps = []
-
-    for mychr in c.chromnames[:-1]:
-#        mymap = np.zeros((2 * pad, 2 * pad), np.float64)
-        print(mychr)
-
-        #data = myd.get_dataset("{0} {0}".format(mychr))
-        data = c.matrix(sparse=True, balance=True).fetch(mychr).tocsr()
-        # plt.imshow(data[:2000, :2000])
-        # plt.show()
-        current = loopPositions[loopPositions["Chromosome"] == mychr]
-        assert len(current) > 0
-        current = np.floor(current[['Start', 'End']]/resolution).astype(int)
-        
-        bins = []
-        for stBin, endBin in zip(current["Start"].values, current["End"].values):
-            if abs(stBin - endBin) < 10:
-                continue
-            # print (stBin, endBin)
-            if stBin - pad - 2 < 0:
-                continue
-            if endBin + pad -2 > data.shape[0]:
-                continue
-            bins.append((stBin, endBin))
-            # plt.imshow(data[stBin - pad:stBin + pad, endBin - pad:endBin + pad])
-            # plt.show()
-        get = partial(get_submap, data=data, pad=pad)
-        mymap = np.sum(Parallel(n_jobs=3)(delayed(get)(start, end) for start, end in bins), axis=0)
-#        mymap = mymap + np.nan_to_num(data[stBin - pad:stBin + pad, endBin - pad:endBin + pad].toarray())
-        mymaps.append(mymap)
-    for i in mymaps:
-        assert i.shape == (2 * pad, 2*pad)
-    return mymaps
-
-def averageLoopsWithControl(loopPositions, filename, cg=1, pad=8):
-    mymaps =  averageLoops(loopPositions, filename, pad = pad)
-    mymaps2 = averageLoops(controlLoops(loopPositions), filename, pad = pad)
-    if cg != 1:
-        mymaps = [coarsegrain(1. * i, cg) / (cg ** 2) for i in mymaps]
-        mymaps2 = [coarsegrain(1. * i, cg) / (cg ** 2) for i in mymaps2]
-    return mymaps, mymaps2
+    #Loops
+    f = partial(averageLoops, mids=mids, c=c, pad=pad, local=local)
+    loops = map(f, chroms)
+    #Controls
+    f = partial(averageLoops, mids=mids, c=c, pad=pad, ctrl=True, local=local)
+    ctrls = map(f, chroms)
+    p.close()
+    return loops, ctrls
     
 if __name__ == "__main__":
-    import sys
-    args = sys.argv
-    baselist = args[1]
-    coolfile = args[2]
-    print(baselist)
-    print(coolfile)
-    try:
-        pad = int(args[3])
-    except IndexError:
-        pad = 8
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("coolfile", type=str)
+    parser.add_argument("baselist", type=str)
+    parser.add_argument("--pad", default=7, type=int, required=False)
+    parser.add_argument("--n_proc", default=0, type=int, required=False)
+    parser.add_argument("--excl_chrs", default='chrY,chrM', type=str, required=False)
+    parser.add_argument("--incl_chrs", default='all', type=str, required=False)
+    parser.add_argument("--local", action='store_true', default=False, required=False)
+    parser.add_argument("--outdir", default='../output/new pileups 5Kb', type=str, required=False)
+    args = parser.parse_args()
+    print(args.coolfile)
+    print(args.baselist)
+    if args.n_proc==0:
+        nproc=-1
+    else:
+        nproc=args.n_proc
     
-    try:
-        cg = int(args[4])
-    except IndexError:
-        cg = 1
-        
-   
-    bases = pd.read_csv(baselist, sep='\t',
+    c = cooler.Cooler(args.coolfile)
+    if args.incl_chrs=='all':
+        incl_chrs = c.chromnames
+    else:
+        incl_chrs = args.incl_chrs.split(',')
+    chroms = cooler.Cooler(args.coolfile).chromnames
+    fchroms = []
+    for chrom in chroms:
+        if chrom not in args.excl_chrs.split(',') and chrom in incl_chrs:
+            fchroms.append(chrom)
+            
+    bases = pd.read_csv(args.baselist, sep='\t',
                         names=['Chromosome', 'Start', 'End'])
-    combs = get_combinations(get_mids(bases))
-    loops, ctrls = averageLoopsWithControl(combs, coolfile, cg, pad)
-    loop = np.array([lp/ctrl*10 for lp, ctrl in zip(loops, ctrls)]).mean(axis=0)
-    np.savetxt('../output/'+coolfile.split('/')[-1].split('_')[0]+'_'+'_'.join(baselist.split('/')[-1].split('_')[:-1])+'.np.txt', loop)
+    mids = get_mids(bases)
+    loops, ctrls = averageLoopsWithControl(mids, args.coolfile, args.pad, nproc, fchroms, args.local)
+    w = mids.groupby('Chromosome').size()
+    w = w.loc[fchroms].values
+    w = comb(w, 2)
+    lp = np.average([lp for lp in loops if not np.all(np.isnan(lp))], weights=w, axis=0)
+    ctrl = np.average([ctrl for ctrl in ctrls if not np.all(np.isnan(ctrl))], weights=w, axis=0)
+    loop = lp/ctrl
+    np.savetxt(os.path.join(args.outdir, args.coolfile.split('/')[-1].split('_')[0]+'_'+'_'.join(args.baselist.split('/')[-1].split('_')[:-1])+'.np.txt'), loop)
